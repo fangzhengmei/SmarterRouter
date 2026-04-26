@@ -107,7 +107,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def normalize_sqlite_database_url(self) -> "Settings":
-        """Normalize relative SQLite paths to absolute project paths."""
+        """Normalize relative SQLite paths to absolute project paths.
+
+        On Windows, generates sqlite:///C:/path/to/db.db format (3 slashes + forward slashes).
+        On Unix, generates sqlite:////abs/path/to/db.db format (4 slashes).
+        """
+        import sys
+
         database_url = self.database_url
         if not isinstance(database_url, str) or "sqlite" not in database_url.lower():
             return self
@@ -130,7 +136,12 @@ class Settings(BaseSettings):
 
         base_dir = Path(__file__).resolve().parents[1]
         resolved = (base_dir / path).resolve()
-        self.database_url = f"sqlite:////{resolved}"
+
+        if sys.platform == "win32":
+            self.database_url = f"sqlite:///{resolved.as_posix()}"
+        else:
+            self.database_url = f"sqlite:////{resolved}"
+
         return self
 
     polling_interval: int = Field(default=300)
