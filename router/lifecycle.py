@@ -473,24 +473,23 @@ async def download_provider_db() -> bool:
 
 
 async def background_cache_cleanup_task() -> None:
-    """Periodically delete expired entries from the persistent cache.
+    """Periodically delete expired entries from both in-memory and persistent caches.
 
     Runs forever, sleeping for ROUTER_CACHE_CLEANUP_INTERVAL_HOURS between
-    executions. Only active if persistent cache is enabled.
+    executions. Cleans both in-memory SemanticCache and persistent database cache.
     """
     cleanup_interval = settings.cache_cleanup_interval_hours * 3600.0
     while True:
         try:
             await asyncio.sleep(cleanup_interval)
-            # Perform cleanup
-            if app_state.router_engine and app_state.router_engine.semantic_cache:
-                pc = app_state.router_engine.semantic_cache.persistent_cache
-                if pc and pc.enabled:
-                    logger.info("Starting persistent cache cleanup...")
-                    counts = await pc.delete_expired_entries()
-                    logger.info(
-                        f"Persistent cache cleanup complete: {counts.get('routing',0)} routing, {counts.get('response',0)} response, {counts.get('embedding',0)} embedding entries removed"
-                    )
+            if app_state.router_engine:
+                logger.info("Starting cache cleanup (memory + persistent)...")
+                counts = await app_state.router_engine.cleanup_expired_cache()
+                logger.info(
+                    f"Cache cleanup complete: "
+                    f"memory={counts['memory']['routing']} routing, {counts['memory']['response']} response, {counts['memory']['embedding']} embedding; "
+                    f"persistent={counts['persistent']['routing']} routing, {counts['persistent']['response']} response, {counts['persistent']['embedding']} embedding"
+                )
         except asyncio.CancelledError:
             logger.info("Cache cleanup task cancelled")
             break

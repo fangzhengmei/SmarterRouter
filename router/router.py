@@ -861,6 +861,80 @@ class SemanticCache:
 
         return evicted
 
+    async def cleanup_expired(self) -> dict[str, int]:
+        """
+        Actively scan and remove expired entries from all caches.
+
+        This method performs proactive TTL-based cleanup, removing entries
+        that have exceeded their TTL even if they haven't been accessed.
+
+        Returns:
+            Dictionary with counts of expired entries removed per cache type
+        """
+        current_time = time.time()
+        expired = {"routing": 0, "response": 0, "embedding": 0}
+
+        async with self._routing_lock:
+            keys_to_remove = []
+            for key, (result, timestamp, _, _, _) in self.cache.items():
+                if current_time - timestamp >= self.ttl:
+                    keys_to_remove.append((key, result))
+
+            for key, result in keys_to_remove:
+                del self.cache[key]
+                if key in self._access_counts:
+                    del self._access_counts[key]
+                expired["routing"] += 1
+                await self._record_cache_event(
+                    cache_type="routing",
+                    event_type="eviction",
+                    model=result.selected_model,
+                    prompt_hash=key,
+                    eviction_reason="ttl",
+                )
+
+        async with self._response_lock:
+            keys_to_remove = []
+            for key, (_, timestamp) in self.response_cache.items():
+                if current_time - timestamp >= self.response_ttl:
+                    keys_to_remove.append(key)
+
+            for key in keys_to_remove:
+                del self.response_cache[key]
+                expired["response"] += 1
+                model_name = key[0] if isinstance(key, tuple) and len(key) > 0 else None
+                await self._record_cache_event(
+                    cache_type="response",
+                    event_type="eviction",
+                    model=model_name,
+                    eviction_reason="ttl",
+                )
+
+        async with self._embedding_lock:
+            keys_to_remove = []
+            for key, (_, _, timestamp) in self.embedding_cache.items():
+                if current_time - timestamp >= self.embedding_ttl:
+                    keys_to_remove.append(key)
+
+            for key in keys_to_remove:
+                del self.embedding_cache[key]
+                expired["embedding"] += 1
+                await self._record_cache_event(
+                    cache_type="embedding",
+                    event_type="eviction",
+                    prompt_hash=key,
+                    eviction_reason="ttl",
+                )
+
+        if any(expired.values()):
+            logger.debug(
+                f"Cleaned up expired cache entries: "
+                f"{expired['routing']} routing, {expired['response']} response, "
+                f"{expired['embedding']} embedding"
+            )
+
+        return expired
+
     async def get_stats(self) -> dict[str, Any]:
         async with self._routing_lock:
             routing_stats: dict[str, int | float] = {
@@ -1010,6 +1084,26 @@ class RouterEngine:
 
         invalidate_provider_cache()
         logger.info("Router caches invalidated")
+
+    async def cleanup_expired_cache(self) -> dict[str, int]:
+        """
+        Clean up expired entries from both in-memory and persistent caches.
+
+        This method proactively removes entries that have exceeded their TTL.
+        It cleans both the in-memory SemanticCache and the persistent database cache.
+
+        Returns:
+            Dictionary with counts of expired entries removed per cache type
+        """
+        result = {"memory": {"routing": 0, "response": 0, "embedding": 0}, "persistent": {"routing": 0, "response": 0, "embedding": 0}}
+
+        if self.cache_enabled and self.semantic_cache:
+            result["memory"] = await self.semantic_cache.cleanup_expired()
+
+            if self.semantic_cache.persistent_cache and self.semantic_cache.persistent_cache.enabled:
+                result["persistent"] = await self.semantic_cache.persistent_cache.delete_expired_entries()
+
+        return result
 
     async def refresh_models(self, cleanup: bool | None = None) -> dict[str, Any]:
         """Refresh model list and update availability.
