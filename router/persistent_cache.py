@@ -84,6 +84,8 @@ class PersistentCacheManager:
                     )
                     results = session.execute(stmt).scalars().all()
 
+                    from router.router import RoutingResult
+
                     for entry in results:
                         try:
                             embedding = entry.embedding
@@ -95,7 +97,7 @@ class PersistentCacheManager:
                                 reasoning=entry.reasoning or "",
                             )
 
-                            timestamp = entry.last_accessed.timestamp()
+                            timestamp = entry.last_accessed.replace(tzinfo=UTC).timestamp()
                             cache_data[entry.cache_key] = (
                                 result,
                                 timestamp,
@@ -149,7 +151,7 @@ class PersistentCacheManager:
                     for entry in results:
                         try:
                             cache_key = entry.cache_key
-                            timestamp = entry.last_accessed.timestamp()
+                            timestamp = entry.last_accessed.replace(tzinfo=UTC).timestamp()
                             cache_data[cache_key] = (entry.response_text, timestamp)
                         except Exception as e:
                             logger.debug(f"Failed to load response cache entry {entry.id}: {e}")
@@ -199,9 +201,9 @@ class PersistentCacheManager:
                             embedding = entry.embedding
                             magnitude = entry.magnitude
                             timestamp = (
-                                entry.last_accessed.timestamp()
+                                entry.last_accessed.replace(tzinfo=UTC).timestamp()
                                 if entry.last_accessed
-                                else entry.created_at.timestamp()
+                                else entry.created_at.replace(tzinfo=UTC).timestamp()
                             )
                             cache_data[entry.prompt_hash] = (embedding, magnitude, timestamp)
                         except Exception as e:
