@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from router.judge import (
@@ -694,3 +695,337 @@ class TestJsonExtractionEdgeCases:
         parsed = json.loads(result)
         assert parsed["score"] == 0.8
         assert "{example}" in parsed["reasoning"]
+
+
+class TestJudgeClientFaultTolerance:
+    """Tests for fault tolerance behavior in multi-dimensional evaluation."""
+
+    @pytest.fixture
+    def judge_enabled(self):
+        """Create a JudgeClient with judge enabled and minimal retries."""
+        with patch("router.judge.settings") as mock_settings:
+            mock_settings.judge_enabled = True
+            mock_settings.judge_model = "gpt-4o"
+            mock_settings.judge_base_url = "https://api.openai.com/v1"
+            mock_settings.judge_api_key = "test-key"
+            mock_settings.judge_max_retries = 1
+            mock_settings.judge_retry_base_delay = 0.0
+            return JudgeClient()
+
+    def _create_success_response(self, score: float = 0.8) -> MagicMock:
+        """Create a successful mock response."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [
+                {"message": {"content": json.dumps({"score": score, "reasoning": "Good"})}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+        return mock_response
+
+    @pytest.mark.asyncio
+    async def test_single_dimension_network_error_fallback(self, judge_enabled):
+        """Test that network error in one dimension triggers fallback score."""
+        network_error = httpx.NetworkError("Connection failed")
+
+        call_count = 0
+
+        async def _post_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise network_error
+            return self._create_success_response(0.8)
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=_post_side_effect)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response that is long enough to pass the fast failure check. "
+                "It has multiple sentences and provides useful information."
+            )
+
+            result = await judge_enabled.evaluate_response("Test prompt", valid_response)
+
+            assert result.is_fast_failure is False
+
+            fallback_count = 0
+            success_count = 0
+            for dim_score in result.dimension_scores.values():
+                if dim_score.metadata.get("fallback"):
+                    fallback_count += 1
+                    assert dim_score.score == 0.5
+                    assert "failed" in dim_score.reasoning.lower()
+                else:
+                    success_count += 1
+                    assert dim_score.score == 0.8
+
+            assert fallback_count >= 1
+            assert success_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_single_dimension_timeout_error_fallback(self, judge_enabled):
+        """Test that timeout error triggers fallback score."""
+        timeout_error = httpx.TimeoutException("Request timed out")
+
+        call_count = 0
+
+        async def _post_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise timeout_error
+            return self._create_success_response(0.9)
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=_post_side_effect)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response that is long enough. "
+                "It has multiple sentences and provides useful information."
+            )
+
+            result = await judge_enabled.evaluate_response("Test prompt", valid_response)
+
+            assert result.is_fast_failure is False
+
+            fallback_scores = [
+                ds for ds in result.dimension_scores.values() if ds.metadata.get("fallback")
+            ]
+            assert len(fallback_scores) >= 1
+
+            for fs in fallback_scores:
+                assert fs.score == 0.5
+                assert "fallback" in fs.reasoning.lower()
+
+    @pytest.mark.asyncio
+    async def test_single_dimension_http_status_error_fallback(self, judge_enabled):
+        """Test that HTTP status error triggers fallback score."""
+        mock_error_response = MagicMock()
+        mock_error_response.status_code = 500
+        http_error = httpx.HTTPStatusError(
+            "Internal server error", request=MagicMock(), response=mock_error_response
+        )
+
+        call_count = 0
+
+        async def _post_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 3:
+                raise http_error
+            return self._create_success_response(0.7)
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=_post_side_effect)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response long enough to pass checks. "
+                "Multiple sentences with useful information."
+            )
+
+            result = await judge_enabled.evaluate_response("Test prompt", valid_response)
+
+            fallback_scores = [
+                ds for ds in result.dimension_scores.values() if ds.metadata.get("fallback")
+            ]
+            assert len(fallback_scores) >= 1
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_parse_error_fallback(self, judge_enabled):
+        """Test that invalid JSON response triggers fallback score."""
+        mock_invalid_response = MagicMock()
+        mock_invalid_response.json.return_value = {
+            "choices": [
+                {"message": {"content": "This is not valid JSON at all"}}
+            ]
+        }
+        mock_invalid_response.raise_for_status = MagicMock()
+
+        call_count = 0
+
+        async def _post_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_invalid_response
+            return self._create_success_response(0.85)
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=_post_side_effect)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response that is long enough. "
+                "It has multiple sentences and provides useful information."
+            )
+
+            result = await judge_enabled.evaluate_response("Test prompt", valid_response)
+
+            fallback_scores = [
+                ds for ds in result.dimension_scores.values() if ds.metadata.get("fallback")
+            ]
+            assert len(fallback_scores) >= 1
+
+            for fs in fallback_scores:
+                assert fs.score == 0.5
+                assert "failed" in fs.reasoning.lower()
+
+    @pytest.mark.asyncio
+    async def test_all_dimensions_fail_graceful_degradation(self, judge_enabled):
+        """Test that pipeline continues to function when all dimensions fail."""
+        network_error = httpx.NetworkError("Connection refused")
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=network_error)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response that is long enough. "
+                "It has multiple sentences and provides useful information."
+            )
+
+            result = await judge_enabled.evaluate_response("Test prompt", valid_response)
+
+            assert result.is_fast_failure is False
+
+            for dim_score in result.dimension_scores.values():
+                assert dim_score.score == 0.5
+                assert dim_score.metadata.get("fallback") is True
+                assert "failed" in dim_score.reasoning.lower()
+
+            assert result.overall_score == 0.5
+
+    @pytest.mark.asyncio
+    async def test_mixed_success_and_failure_weighted_correctly(self, judge_enabled):
+        """Test that mixed success and failure scores are combined correctly."""
+        responses_by_call = {
+            EvaluationDimension.ACCURACY: self._create_success_response(1.0),
+            EvaluationDimension.HELPFULNESS: self._create_success_response(1.0),
+            EvaluationDimension.CLARITY: self._create_success_response(0.5),
+            EvaluationDimension.CONCISENESS: self._create_success_response(0.5),
+            EvaluationDimension.INSTRUCTION_FOLLOWING: self._create_success_response(0.5),
+        }
+
+        dims = list(EvaluationDimension)
+        call_index = 0
+
+        async def _post_side_effect(*args, **kwargs):
+            nonlocal call_index
+            if call_index < len(dims):
+                result = responses_by_call[dims[call_index]]
+                call_index += 1
+                return result
+            return self._create_success_response(0.5)
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=_post_side_effect)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response that is long enough. "
+                "It has multiple sentences and provides useful information."
+            )
+
+            result = await judge_enabled.evaluate_response("Test prompt", valid_response)
+
+            assert result.is_fast_failure is False
+
+    @pytest.mark.asyncio
+    async def test_http_400_error_no_retry(self):
+        """Test that HTTP 400 error does not retry and uses fallback."""
+        with patch("router.judge.settings") as mock_settings:
+            mock_settings.judge_enabled = True
+            mock_settings.judge_model = "gpt-4o"
+            mock_settings.judge_base_url = "https://api.openai.com/v1"
+            mock_settings.judge_api_key = "test-key"
+            mock_settings.judge_max_retries = 3
+            mock_settings.judge_retry_base_delay = 0.0
+
+            judge = JudgeClient()
+
+        mock_400_response = MagicMock()
+        mock_400_response.status_code = 400
+        http_400_error = httpx.HTTPStatusError(
+            "Bad request", request=MagicMock(), response=mock_400_response
+        )
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=http_400_error)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            valid_response = (
+                "This is a valid response that is long enough. "
+                "It has multiple sentences and provides useful information."
+            )
+
+            result = await judge.evaluate_response("Test prompt", valid_response)
+
+            for dim_score in result.dimension_scores.values():
+                assert dim_score.score == 0.5
+                assert dim_score.metadata.get("fallback") is True
+
+            assert mock_client_instance.post.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_batch_evaluation(self, judge_enabled):
+        """Test batch evaluation with partial failures."""
+        success_response = self._create_success_response(0.8)
+        network_error = httpx.NetworkError("Connection failed")
+
+        call_count = 0
+
+        async def _post_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count % 2 == 0:
+                raise network_error
+            return success_response
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client_instance.post = AsyncMock(side_effect=_post_side_effect)
+            mock_client_instance.is_closed = False
+            mock_client.return_value = mock_client_instance
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+
+            pairs = [
+                ("Prompt 1", "This is a valid response long enough."),
+                ("Prompt 2", "Another valid response with good content."),
+            ]
+
+            results = await judge_enabled.evaluate_responses_batch(pairs, max_concurrent=1)
+
+            assert len(results) == 2
+
+            for result in results:
+                assert result.is_fast_failure is False
+
+                has_fallback = any(
+                    ds.metadata.get("fallback") for ds in result.dimension_scores.values()
+                )
+                assert has_fallback
