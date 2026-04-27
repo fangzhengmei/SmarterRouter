@@ -125,6 +125,7 @@ class ExternalBackendFactory:
             api_key=api_key,
             model_prefix=model_prefix,
             timeout=settings.generation_timeout,
+            provider=provider,
         )
 
         self._backends[provider] = backend

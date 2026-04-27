@@ -1143,6 +1143,13 @@ class RouterEngine:
                 f"No models available after filtering (include={include}, exclude={exclude})"
             )
 
+        available_models = self._filter_healthy_backends(available_models)
+
+        if not available_models:
+            raise ValueError(
+                "No models available after health filtering (all backends unhealthy)"
+            )
+
         model_names = [m.name for m in available_models]
 
         # Convert prompt to string for analysis
@@ -1282,6 +1289,65 @@ Select the model that best matches the user's prompt needs."""
         except Exception as e:
             logger.warning(f"Failed to fetch feedback scores: {e}")
             return {}
+
+    def _filter_healthy_backends(self, models: list[ModelInfo]) -> list[ModelInfo]:
+        """
+        Filter models by backend health status.
+
+        Only returns models from backends that are healthy or can accept requests.
+        If all backends are unhealthy, returns all models (fail-open strategy).
+
+        Args:
+            models: List of ModelInfo objects to filter.
+
+        Returns:
+            Filtered list of ModelInfo objects.
+        """
+        if not settings.backend_health_enabled:
+            return models
+
+        from router.backends.resilience import (
+            build_backend_id_for_model,
+            get_health_manager_from_config,
+        )
+
+        health_manager = get_health_manager_from_config(settings)
+
+        models_by_backend: dict[str, list[ModelInfo]] = {}
+        for model in models:
+            backend_id = build_backend_id_for_model(model.name)
+            if backend_id not in models_by_backend:
+                models_by_backend[backend_id] = []
+            models_by_backend[backend_id].append(model)
+
+        healthy_backends = health_manager.filter_healthy_backends(
+            list(models_by_backend.keys())
+        )
+
+        if not healthy_backends:
+            logger.warning("All backends reported unhealthy, failing open to all models")
+            return models
+
+        result: list[ModelInfo] = []
+        unhealthy_backends: set[str] = set()
+
+        for backend_id, backend_models in models_by_backend.items():
+            if backend_id in healthy_backends:
+                result.extend(backend_models)
+            else:
+                unhealthy_backends.add(backend_id)
+
+        if unhealthy_backends:
+            logger.debug(
+                f"Filtered out models from {len(unhealthy_backends)} unhealthy backends: "
+                f"{sorted(unhealthy_backends)}"
+            )
+
+        if not result:
+            logger.warning("No healthy backends available, returning all models (fail-open)")
+            return models
+
+        return result
 
     async def _keyword_dispatch(
         self, prompt: str, model_names: list[str], request_obj: Any = None

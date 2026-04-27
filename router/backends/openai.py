@@ -28,7 +28,9 @@ class OpenAIBackend(LLMBackend):
         timeout: float = 120.0,
         models_cache_ttl: float = 30.0,  # Cache model list for 30 seconds
         config: Any | None = None,
+        provider: str | None = None,
     ):
+        from router.backends.resilience import build_backend_id_for_model
         from router.config import settings as global_settings
 
         self.base_url = base_url.rstrip("/")
@@ -40,6 +42,12 @@ class OpenAIBackend(LLMBackend):
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
         self.config = config or global_settings
+        self.provider = provider
+
+        if provider:
+            self._backend_id = build_backend_id_for_model("", backend_type="external", provider=provider)
+        else:
+            self._backend_id = build_backend_id_for_model("", backend_type="local", provider=None)
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create persistent HTTP client for connection reuse."""
@@ -106,6 +114,7 @@ class OpenAIBackend(LLMBackend):
             operation_name="openai_request",
             operation=perform_request,
             config=self.config,
+            backend_id=self._backend_id,
         )
 
     async def list_models(self) -> list[ModelInfo]:

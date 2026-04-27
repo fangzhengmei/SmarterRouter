@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     backend_circuit_breaker_half_open_max_attempts: int = Field(default=3)
     backend_circuit_breaker_sliding_window_size: int = Field(default=100)
 
+    # Backend health-aware routing configuration
+    backend_health_enabled: bool = Field(default=True)
+    backend_health_failure_threshold: int = Field(default=3)
+    backend_health_recovery_interval: float = Field(default=30.0)  # seconds
+    backend_health_probe_attempts: int = Field(default=2)
+    backend_health_success_streak_reset: int = Field(default=3)
+
     # Ollama settings
     ollama_url: str = Field(default="http://localhost:11434")
 
