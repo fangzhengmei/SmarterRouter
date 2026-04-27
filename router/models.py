@@ -29,7 +29,7 @@ class ModelProfile(Base):
     avg_response_time_ms: Mapped[float] = mapped_column(Float, default=0.0)
     last_profiled: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_seen: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     # Model availability tracking (SmarterRouter 2.1.6+)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -70,7 +70,7 @@ class RoutingDecision(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
 
     response_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
@@ -148,7 +148,7 @@ class ModelFeedback(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
 
     model_name: Mapped[str] = mapped_column(String, index=True)
@@ -175,10 +175,10 @@ class RoutingCache(Base):
     embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     embedding_magnitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     last_accessed: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     access_count: Mapped[int] = mapped_column(Integer, default=1)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -205,10 +205,10 @@ class ResponseCache(Base):
     parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     response_text: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     last_accessed: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     access_count: Mapped[int] = mapped_column(Integer, default=1)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -232,10 +232,10 @@ class EmbeddingCache(Base):
     embedding: Mapped[list[float]] = mapped_column(JSON)
     magnitude: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     last_accessed: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     access_count: Mapped[int] = mapped_column(Integer, default=1)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -248,7 +248,7 @@ class AdminAuditLog(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+        DateTime(timezone=True), default=lambda: datetime.utcnow(), index=True
     )
 
     action: Mapped[str] = mapped_column(String, index=True)  # e.g. "reprofile", "cache_clear"
@@ -281,7 +281,7 @@ class BackgroundTaskDLQ(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.utcnow()
     )
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

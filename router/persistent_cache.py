@@ -50,13 +50,15 @@ class PersistentCacheManager:
         Returns:
             Dictionary mapping cache_key to (result, timestamp, embedding, magnitude, access_count)
         """
+        from router.router import RoutingResult
+
         if not self.enabled:
             return {}
 
         async with self._load_lock:
             try:
                 cache_data = {}
-                cutoff_time = datetime.now(UTC) - timedelta(days=self.max_age_days)
+                cutoff_time = datetime.utcnow() - timedelta(days=self.max_age_days)
 
                 with get_session() as session:
                     # Load non-expired routing cache entries
@@ -65,7 +67,7 @@ class PersistentCacheManager:
                         .where(
                             (
                                 RoutingCache.expires_at.is_(None)
-                                | (RoutingCache.expires_at > datetime.now(UTC))
+                                | (RoutingCache.expires_at > datetime.utcnow())
                             )
                             & (RoutingCache.created_at > cutoff_time)
                         )
@@ -122,7 +124,7 @@ class PersistentCacheManager:
         async with self._load_lock:
             try:
                 cache_data = {}
-                cutoff_time = datetime.now(UTC) - timedelta(days=self.max_age_days)
+                cutoff_time = datetime.utcnow() - timedelta(days=self.max_age_days)
 
                 with get_session() as session:
                     # Load non-expired response cache entries
@@ -131,7 +133,7 @@ class PersistentCacheManager:
                         .where(
                             (
                                 ResponseCache.expires_at.is_(None)
-                                | (ResponseCache.expires_at > datetime.now(UTC))
+                                | (ResponseCache.expires_at > datetime.utcnow())
                             )
                             & (ResponseCache.created_at > cutoff_time)
                         )
@@ -172,7 +174,7 @@ class PersistentCacheManager:
         async with self._load_lock:
             try:
                 cache_data = {}
-                cutoff_time = datetime.now(UTC) - timedelta(days=self.max_age_days)
+                cutoff_time = datetime.utcnow() - timedelta(days=self.max_age_days)
 
                 with get_session() as session:
                     # Load non-expired embedding cache entries
@@ -181,7 +183,7 @@ class PersistentCacheManager:
                         .where(
                             (
                                 EmbeddingCache.expires_at.is_(None)
-                                | (EmbeddingCache.expires_at > datetime.now(UTC))
+                                | (EmbeddingCache.expires_at > datetime.utcnow())
                             )
                             & (EmbeddingCache.created_at > cutoff_time)
                         )
@@ -241,7 +243,7 @@ class PersistentCacheManager:
             try:
                 expires_at = None
                 if ttl_seconds > 0:
-                    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+                    expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
 
                 with get_session() as session:
                     # Check if entry exists
@@ -256,7 +258,7 @@ class PersistentCacheManager:
                         existing.reasoning = result.reasoning
                         existing.embedding = embedding
                         existing.embedding_magnitude = embedding_magnitude
-                        existing.last_accessed = datetime.now(UTC)
+                        existing.last_accessed = datetime.utcnow()
                         existing.access_count = (existing.access_count or 0) + 1
                         existing.expires_at = expires_at
                     else:
@@ -268,7 +270,7 @@ class PersistentCacheManager:
                             reasoning=result.reasoning,
                             embedding=embedding,
                             embedding_magnitude=embedding_magnitude,
-                            last_accessed=datetime.now(UTC),
+                            last_accessed=datetime.utcnow(),
                             access_count=1,
                             expires_at=expires_at,
                         )
@@ -314,7 +316,7 @@ class PersistentCacheManager:
 
                 expires_at = None
                 if ttl_seconds > 0:
-                    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+                    expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
 
                 with get_session() as session:
                     # Check if entry exists
@@ -329,7 +331,7 @@ class PersistentCacheManager:
                     if existing:
                         # Update existing entry
                         existing.response_text = response_text
-                        existing.last_accessed = datetime.now(UTC)
+                        existing.last_accessed = datetime.utcnow()
                         existing.access_count = (existing.access_count or 0) + 1
                         existing.expires_at = expires_at
                     else:
@@ -339,7 +341,7 @@ class PersistentCacheManager:
                             prompt_hash=prompt_hash,
                             parameters=parameters,
                             response_text=response_text,
-                            last_accessed=datetime.now(UTC),
+                            last_accessed=datetime.utcnow(),
                             access_count=1,
                             expires_at=expires_at,
                         )
@@ -378,7 +380,7 @@ class PersistentCacheManager:
             try:
                 expires_at = None
                 if ttl_seconds > 0:
-                    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+                    expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
 
                 with get_session() as session:
                     # Check if entry exists
@@ -390,7 +392,7 @@ class PersistentCacheManager:
                         # Update existing entry
                         existing.embedding = embedding
                         existing.magnitude = magnitude
-                        existing.last_accessed = datetime.now(UTC)
+                        existing.last_accessed = datetime.utcnow()
                         existing.access_count = (existing.access_count or 0) + 1
                         existing.expires_at = expires_at
                     else:
@@ -399,7 +401,7 @@ class PersistentCacheManager:
                             prompt_hash=prompt_hash,
                             embedding=embedding,
                             magnitude=magnitude,
-                            last_accessed=datetime.now(UTC),
+                            last_accessed=datetime.utcnow(),
                             access_count=1,
                             expires_at=expires_at,
                         )
@@ -426,7 +428,7 @@ class PersistentCacheManager:
             counts = {"routing": 0, "response": 0, "embedding": 0}
 
             with get_session() as session:
-                now_dt = datetime.now(UTC)
+                now_dt = datetime.utcnow()
 
                 # Bulk delete expired routing cache entries
                 result = session.execute(
@@ -487,7 +489,7 @@ class PersistentCacheManager:
 
         try:
             with get_session() as session:
-                now_dt = datetime.now(UTC)
+                now_dt = datetime.utcnow()
                 active = RoutingCache.expires_at.is_(None) | (RoutingCache.expires_at > now_dt)
                 routing_count = session.scalar(
                     select(func.count()).select_from(RoutingCache).where(active)

@@ -4,7 +4,7 @@ Uses the real RouterEngine/SemanticCache APIs and verifies persistent cache
 behavior through reload scenarios.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -89,6 +89,9 @@ async def test_routing_entry_round_trip_via_persistence(test_db) -> None:
         entries = session.execute(select(RoutingCache)).scalars().all()
         assert len(entries) == 1, f"Expected 1 entry, got {len(entries)}"
         assert entries[0].cache_key is not None
+        print(f"\n=== DEBUG: Stored entry cache_key = {entries[0].cache_key} ===")
+        print(f"=== DEBUG: Stored entry created_at = {entries[0].created_at} ===")
+        print(f"=== DEBUG: Stored entry expires_at = {entries[0].expires_at} ===")
 
     router2 = RouterEngine(client=_DummyBackend(), cache_enabled=True)
     if not router2.semantic_cache:
@@ -98,7 +101,29 @@ async def test_routing_entry_round_trip_via_persistence(test_db) -> None:
         entries = session.execute(select(RoutingCache)).scalars().all()
         assert len(entries) == 1, f"Expected 1 entry before load, got {len(entries)}"
 
+    print(f"\n=== DEBUG: router2.semantic_cache.persistent_cache.enabled = {router2.semantic_cache.persistent_cache.enabled} ===")
+    print(f"=== DEBUG: router2.semantic_cache.persistent_cache.max_age_days = {router2.semantic_cache.persistent_cache.max_age_days} ===")
+    
+    now = datetime.utcnow()
+    cutoff_time = now - timedelta(days=router2.semantic_cache.persistent_cache.max_age_days)
+    print(f"=== DEBUG: Current time (utcnow) = {now} ===")
+    print(f"=== DEBUG: Cutoff time = {cutoff_time} ===")
+    
+    with get_session() as session:
+        entries = session.execute(select(RoutingCache)).scalars().all()
+        for entry in entries:
+            print(f"=== DEBUG: Entry created_at = {entry.created_at}, type = {type(entry.created_at)} ===")
+            print(f"=== DEBUG: created_at > cutoff_time = {entry.created_at > cutoff_time} ===")
+            if entry.expires_at:
+                print(f"=== DEBUG: Entry expires_at = {entry.expires_at}, type = {type(entry.expires_at)} ===")
+                print(f"=== DEBUG: expires_at > now = {entry.expires_at > now} ===")
+    
+    routing_data = await router2.semantic_cache.persistent_cache.load_routing_cache()
+    print(f"=== DEBUG: load_routing_cache returned {len(routing_data)} entries ===")
+    print(f"=== DEBUG: routing_data keys = {list(routing_data.keys())} ===")
+
     await router2.semantic_cache.load_from_persistence()
+    print(f"=== DEBUG: After load_from_persistence, cache has {len(router2.semantic_cache.cache)} entries ===")
 
     with get_session() as session:
         entries = session.execute(select(RoutingCache)).scalars().all()
