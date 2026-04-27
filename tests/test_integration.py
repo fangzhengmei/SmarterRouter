@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 sys.modules.setdefault("pandas", MagicMock())
 
 from main import app, app_state, get_settings
+from router.backends import resilience
+from router.backends.health import reset_health_manager
 from router.config import Settings
 
 
@@ -54,6 +56,59 @@ class TestHealthEndpoints:
         data = response.json()
         assert data["status"] in {"healthy", "unhealthy"}
         assert "checks" in data
+
+    def test_health_endpoint_includes_backends_summary(self, client):
+        """Test health endpoint includes backend health summary."""
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        checks = data.get("checks", {})
+
+        assert "backends" in checks
+        assert "backends_summary" in checks
+
+        summary = checks["backends_summary"]
+        assert "total_tracked" in summary
+        assert "unhealthy_count" in summary
+        assert "healthy_count" in summary
+
+    def test_health_endpoint_shows_unhealthy_backend(self, client):
+        """Test health endpoint correctly shows unhealthy backends."""
+        from router.backends.health import get_health_manager
+
+        health_manager = get_health_manager()
+
+        import asyncio
+
+        async def simulate_failures():
+            for _ in range(5):
+                await health_manager.record_failure("test-backend-1")
+            await health_manager.record_success("test-backend-2")
+
+        asyncio.run(simulate_failures())
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        checks = data.get("checks", {})
+
+        assert "test-backend-1" in checks["backends"]
+        assert "test-backend-2" in checks["backends"]
+
+        backend1 = checks["backends"]["test-backend-1"]
+        assert backend1["status"] == "unhealthy"
+        assert backend1["status_display"] == "临时下线"
+        assert backend1["is_healthy"] is False
+
+        backend2 = checks["backends"]["test-backend-2"]
+        assert backend2["status"] == "healthy"
+        assert backend2["status_display"] == "在线"
+        assert backend2["is_healthy"] is True
+
+        summary = checks["backends_summary"]
+        assert summary["total_tracked"] == 2
+        assert summary["unhealthy_count"] == 1
+        assert summary["healthy_count"] == 1
 
 
 class TestModelEndpoints:

@@ -11,6 +11,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
+from router.backends.health import get_health_manager
 from router.config import Settings, settings
 from router.database import get_session
 from router.dlq import count_dlq_entries
@@ -133,6 +134,49 @@ async def health(
             }
         except Exception as e:
             checks["dlq"] = f"error: {str(e)}"
+
+    # 7. Backend health status
+    try:
+        health_manager = get_health_manager()
+        backend_stats = health_manager.get_all_stats()
+        if backend_stats:
+            backends_health = {}
+            unhealthy_count = 0
+            for backend_id, stats in backend_stats.items():
+                status_display = {
+                    "healthy": "在线",
+                    "unhealthy": "临时下线",
+                    "probing": "探测恢复中",
+                }.get(stats.get("status", "unknown"), stats.get("status", "unknown"))
+
+                backends_health[backend_id] = {
+                    "status": stats.get("status"),
+                    "status_display": status_display,
+                    "is_healthy": stats.get("is_healthy"),
+                    "can_accept_request": stats.get("can_accept_request"),
+                    "consecutive_failures": stats.get("consecutive_failures"),
+                    "consecutive_successes": stats.get("consecutive_successes"),
+                    "total_failures": stats.get("total_failures"),
+                    "total_successes": stats.get("total_successes"),
+                }
+                if not stats.get("is_healthy"):
+                    unhealthy_count += 1
+
+            checks["backends"] = backends_health
+            checks["backends_summary"] = {
+                "total_tracked": len(backend_stats),
+                "unhealthy_count": unhealthy_count,
+                "healthy_count": len(backend_stats) - unhealthy_count,
+            }
+        else:
+            checks["backends"] = "no tracked backends yet"
+            checks["backends_summary"] = {
+                "total_tracked": 0,
+                "unhealthy_count": 0,
+                "healthy_count": 0,
+            }
+    except Exception as e:
+        checks["backends"] = f"error: {str(e)}"
 
     return {
         "status": overall_status,
