@@ -275,18 +275,69 @@ class SemanticCache:
             key = f"{eviction_reason or 'unknown'}_{cache_type}"
             self._eviction_counts[key] = self._eviction_counts.get(key, 0) + 1
 
+    async def load_routing_history(self) -> None:
+        """Load routing decision history from RoutingDecision table to recover recent_selections and _model_frequency.
+
+        This method queries the RoutingDecision table for recent decisions and
+        reconstructs the in-memory state used for adaptive threshold calculation
+        and model frequency tracking.
+
+        Note: This is independent of persistent_cache settings because RoutingDecision
+        is always written by log_decision() regardless of cache settings.
+        """
+        try:
+            with get_session() as session:
+                stmt = (
+                    select(RoutingDecision)
+                    .order_by(RoutingDecision.timestamp.desc())
+                    .limit(self.max_recent)
+                )
+                decisions = session.execute(stmt).scalars().all()
+
+            if not decisions:
+                logger.debug("No routing decision history found in database")
+                return
+
+            decisions_sorted = sorted(decisions, key=lambda d: d.timestamp)
+
+            async with self._routing_lock:
+                self.recent_selections.clear()
+                self._model_frequency.clear()
+
+                for decision in decisions_sorted:
+                    model_name = decision.selected_model
+                    timestamp = decision.timestamp.timestamp()
+
+                    self.recent_selections.append((model_name, timestamp))
+
+                    if len(self.recent_selections) > self.max_recent:
+                        old = self.recent_selections.pop(0)
+                        if old[0] in self._model_frequency:
+                            self._model_frequency[old[0]] = max(
+                                0, self._model_frequency[old[0]] - 1
+                            )
+
+                    self._model_frequency[model_name] = (
+                        self._model_frequency.get(model_name, 0) + 1
+                    )
+
+            logger.info(
+                f"Loaded {len(self.recent_selections)} routing decisions from history "
+                f"(models: {list(self._model_frequency.keys())})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load routing decision history: {e}")
+
     async def load_from_persistence(self) -> None:
         """Load cache data from persistent storage if enabled."""
         if not self.persistent_cache or not self.persistent_cache.enabled:
             return
 
         try:
-            # Load routing cache with access counts, prioritizing high-access entries
             routing_data = await self.persistent_cache.load_routing_cache()
             async with self._routing_lock:
                 self.cache.clear()
                 self._access_counts.clear()
-                # Sort by access_count descending, limit to max_size (Top-K pre-caching)
                 sorted_items = sorted(
                     routing_data.items(),
                     key=lambda x: x[1][4],  # access_count is 5th element in tuple
@@ -302,20 +353,16 @@ class SemanticCache:
                     self.cache[cache_key] = (result, timestamp, embedding, magnitude, access_count)
                     self._access_counts[cache_key] = access_count
 
-            # Load response cache, limit to max size
             response_data = await self.persistent_cache.load_response_cache()
             async with self._response_lock:
                 self.response_cache.clear()
-                # Take only top response_max_size entries (already sorted by access_count)
                 response_items = list(response_data.items())[: self.response_max_size]
                 for resp_key, (response_text, timestamp) in response_items:
                     self.response_cache[resp_key] = (response_text, timestamp)
 
-            # Load embedding cache, limit to max size
             embedding_data = await self.persistent_cache.load_embedding_cache()
             async with self._embedding_lock:
                 self.embedding_cache.clear()
-                # Take only top embedding_max_size entries (already sorted by access_count)
                 embedding_items = list(embedding_data.items())[: self.embedding_max_size]
                 for prompt_hash, (embedding, magnitude, timestamp) in embedding_items:
                     self.embedding_cache[prompt_hash] = (embedding, magnitude, timestamp)
@@ -986,8 +1033,9 @@ class RouterEngine:
             self.semantic_cache = None
 
     async def load_persistent_cache(self) -> None:
-        """Load cache data from persistent storage."""
+        """Load cache data and routing decision history from persistent storage."""
         if self.cache_enabled and self.semantic_cache:
+            await self.semantic_cache.load_routing_history()
             await self.semantic_cache.load_from_persistence()
             # Expired entries cleanup is handled by background task
 
