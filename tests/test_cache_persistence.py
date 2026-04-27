@@ -4,9 +4,14 @@ Uses the real RouterEngine/SemanticCache APIs and verifies persistent cache
 behavior through reload scenarios.
 """
 
+from unittest.mock import patch
+
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from router.backends.base import ModelInfo
+from router.models import Base
 from router.router import RouterEngine, RoutingResult
 
 
@@ -40,7 +45,19 @@ class _DummyBackend:
 
 
 @pytest.fixture
-def engine() -> RouterEngine:
+def test_db():
+    """Create test database."""
+    engine = create_engine("sqlite:///:memory:")
+    testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with patch("router.database.engine", engine):
+        with patch("router.database.SessionLocal", testing_session_local):
+            yield engine
+
+
+@pytest.fixture
+def engine(test_db) -> RouterEngine:
     return RouterEngine(client=_DummyBackend(), cache_enabled=True)
 
 
