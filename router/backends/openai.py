@@ -253,6 +253,7 @@ class OpenAIBackend(LLMBackend):
             operation_name="openai_stream_setup",
             operation=attempt_stream,
             config=self.config,
+            backend_id=self._backend_id,
         )
 
     async def unload_model(self, model_name: str) -> bool:

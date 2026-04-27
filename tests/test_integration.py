@@ -104,7 +104,7 @@ class TestAdminEndpoints:
 
     def test_get_profiles_authorized(self, authed_client):
         """Test admin endpoint with correct authentication."""
-        with patch("main.get_session"):
+        with patch("router.api.admin.get_session"):
             response = authed_client.get("/admin/profiles")
             assert response.status_code == 200
 
@@ -118,10 +118,9 @@ class TestAdminEndpoints:
         app.dependency_overrides = {}
 
     def test_get_benchmarks_authorized(self, authed_client):
-        with patch("main.get_session"):
-            with patch("main.get_last_sync"):
-                response = authed_client.get("/admin/benchmarks")
-                assert response.status_code == 200
+        with patch("router.api.admin.get_session"):
+            response = authed_client.get("/admin/benchmarks")
+            assert response.status_code == 200
 
     def test_reprofile_unauthorized(self, client):
         def get_settings_override():
@@ -132,7 +131,7 @@ class TestAdminEndpoints:
         assert response.status_code == 401
         app.dependency_overrides = {}
 
-    @patch("main.profile_all_models", new_callable=AsyncMock)
+    @patch("router.api.admin.profile_all_models", new_callable=AsyncMock)
     def test_reprofile_authorized(self, mock_profile, authed_client):
         mock_profile.return_value = []
         app_state.backend = MagicMock()
@@ -140,8 +139,8 @@ class TestAdminEndpoints:
         assert response.status_code == 200
 
     def test_get_dlq_authorized(self, authed_client):
-        with patch("main.list_dlq_entries", return_value=[]):
-            with patch("main.count_dlq_entries", return_value=0):
+        with patch("router.api.admin.list_dlq_entries", return_value=[]):
+            with patch("router.api.admin.count_dlq_entries", return_value=0):
                 response = authed_client.get("/admin/dlq")
                 assert response.status_code == 200
                 data = response.json()
@@ -149,6 +148,6 @@ class TestAdminEndpoints:
                 assert data["entries"] == []
 
     def test_retry_dlq_entry_not_found(self, authed_client):
-        with patch("main.get_dlq_entry", return_value=None):
+        with patch("router.api.admin.get_dlq_entry", return_value=None):
             response = authed_client.post("/admin/dlq/retry/123")
             assert response.status_code == 404

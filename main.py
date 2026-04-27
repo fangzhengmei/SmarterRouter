@@ -22,6 +22,12 @@ from router.state import (
     _ip_in_whitelist,
 )
 
+# Re-export database and profiling utilities for test mock compatibility
+from router.database import get_session
+from router.benchmark_db import get_last_sync
+from router.dlq import count_dlq_entries, get_dlq_entry, list_dlq_entries
+from router.profiler import profile_all_models
+
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app with lifespan management

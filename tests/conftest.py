@@ -2,8 +2,24 @@
 
 import pytest
 
+from router.backends import resilience
+from router.backends.health import reset_health_manager
+
 # Configure pytest-asyncio
 pytest_plugins = ("pytest_asyncio",)
+
+
+@pytest.fixture(autouse=True)
+def reset_health_state_before_tests():
+    """Reset global health manager state before each test.
+
+    This ensures that health tracking state from one test doesn't
+    affect other tests, preventing issues where backends marked as
+    unhealthy in one test cause failures in subsequent tests.
+    """
+    reset_health_manager()
+    resilience._health_manager = None
+    yield
 
 
 def pytest_configure(config):
