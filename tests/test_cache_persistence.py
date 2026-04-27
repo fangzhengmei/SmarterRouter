@@ -4,14 +4,17 @@ Uses the real RouterEngine/SemanticCache APIs and verifies persistent cache
 behavior through reload scenarios.
 """
 
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from router.backends.base import ModelInfo
-from router.models import Base
+from router.database import get_session
+from router.models import Base, RoutingCache, ResponseCache
 from router.router import RouterEngine, RoutingResult
 
 
@@ -46,8 +49,17 @@ class _DummyBackend:
 
 @pytest.fixture
 def test_db():
-    """Create test database."""
-    engine = create_engine("sqlite:///:memory:")
+    """Create test database using StaticPool to ensure single connection for in-memory SQLite.
+
+    SQLite in-memory databases are isolated per connection by default. Using StaticPool
+    ensures all sessions share the same connection, allowing data to be visible across
+    different session instances.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
 
@@ -56,14 +68,12 @@ def test_db():
             yield engine
 
 
-@pytest.fixture
-def engine(test_db) -> RouterEngine:
-    return RouterEngine(client=_DummyBackend(), cache_enabled=True)
-
-
 @pytest.mark.asyncio
-async def test_routing_entry_round_trip_via_persistence(engine: RouterEngine) -> None:
-    if not engine.semantic_cache or not engine.semantic_cache.persistent_cache:
+async def test_routing_entry_round_trip_via_persistence(test_db) -> None:
+    """Test that routing cache entries persist and can be loaded across RouterEngine instances."""
+    router1 = RouterEngine(client=_DummyBackend(), cache_enabled=True)
+
+    if not router1.semantic_cache or not router1.semantic_cache.persistent_cache:
         pytest.skip("Persistent cache is not enabled")
 
     prompt = "cache persistence prompt"
@@ -73,50 +83,73 @@ async def test_routing_entry_round_trip_via_persistence(engine: RouterEngine) ->
         reasoning="test",
     )
 
-    await engine.semantic_cache.set(prompt, result, embedding=[0.1, 0.2, 0.3])
+    await router1.semantic_cache.set(prompt, result, embedding=[0.1, 0.2, 0.3])
 
-    # Simulate restart/load into a fresh cache object
-    other = RouterEngine(client=_DummyBackend(), cache_enabled=True)
-    if not other.semantic_cache:
+    with get_session() as session:
+        entries = session.execute(select(RoutingCache)).scalars().all()
+        assert len(entries) == 1, f"Expected 1 entry, got {len(entries)}"
+        assert entries[0].cache_key is not None
+
+    router2 = RouterEngine(client=_DummyBackend(), cache_enabled=True)
+    if not router2.semantic_cache:
         pytest.fail("Semantic cache is unexpectedly disabled")
 
-    await other.semantic_cache.load_from_persistence()
-    loaded = await other.semantic_cache.get(prompt, embedding=[0.1, 0.2, 0.3])
+    with get_session() as session:
+        entries = session.execute(select(RoutingCache)).scalars().all()
+        assert len(entries) == 1, f"Expected 1 entry before load, got {len(entries)}"
 
-    assert loaded is not None
+    await router2.semantic_cache.load_from_persistence()
+
+    with get_session() as session:
+        entries = session.execute(select(RoutingCache)).scalars().all()
+        assert len(entries) == 1, f"Expected 1 entry after load, got {len(entries)}"
+
+    loaded = await router2.semantic_cache.get(prompt, embedding=[0.1, 0.2, 0.3])
+
+    assert loaded is not None, f"Expected cached result, got None. Cache has {len(router2.semantic_cache.cache)} entries"
     assert loaded.selected_model == "model-a"
 
 
 @pytest.mark.asyncio
-async def test_response_entry_round_trip_via_persistence(engine: RouterEngine) -> None:
-    if not engine.semantic_cache or not engine.semantic_cache.persistent_cache:
+async def test_response_entry_round_trip_via_persistence(test_db) -> None:
+    """Test that response cache entries persist and can be loaded across RouterEngine instances."""
+    router1 = RouterEngine(client=_DummyBackend(), cache_enabled=True)
+
+    if not router1.semantic_cache or not router1.semantic_cache.persistent_cache:
         pytest.skip("Persistent cache is not enabled")
 
     model = "model-a"
     prompt = "response cache prompt"
     text = "cached response"
 
-    await engine.semantic_cache.set_response(model=model, prompt=prompt, response=text)
+    await router1.semantic_cache.set_response(model=model, prompt=prompt, response=text)
 
-    other = RouterEngine(client=_DummyBackend(), cache_enabled=True)
-    if not other.semantic_cache:
+    with get_session() as session:
+        entries = session.execute(select(ResponseCache)).scalars().all()
+        assert len(entries) == 1, f"Expected 1 response entry, got {len(entries)}"
+
+    router2 = RouterEngine(client=_DummyBackend(), cache_enabled=True)
+    if not router2.semantic_cache:
         pytest.fail("Semantic cache is unexpectedly disabled")
 
-    await other.semantic_cache.load_from_persistence()
-    loaded = await other.semantic_cache.get_response(model=model, prompt=prompt)
+    await router2.semantic_cache.load_from_persistence()
+    loaded = await router2.semantic_cache.get_response(model=model, prompt=prompt)
 
-    assert loaded == text
+    assert loaded == text, f"Expected '{text}', got {loaded}"
 
 
 @pytest.mark.asyncio
-async def test_clear_removes_entries_from_memory(engine: RouterEngine) -> None:
-    if not engine.semantic_cache:
+async def test_clear_removes_entries_from_memory(test_db) -> None:
+    """Test that clear() removes entries from in-memory cache."""
+    router = RouterEngine(client=_DummyBackend(), cache_enabled=True)
+
+    if not router.semantic_cache:
         pytest.fail("Semantic cache is unexpectedly disabled")
 
     prompt = "memory clear prompt"
     result = RoutingResult(selected_model="model-a", confidence=0.5, reasoning="test")
-    await engine.semantic_cache.set(prompt, result)
+    await router.semantic_cache.set(prompt, result)
 
-    assert await engine.semantic_cache.get(prompt) is not None
-    await engine.semantic_cache.clear()
-    assert await engine.semantic_cache.get(prompt) is None
+    assert await router.semantic_cache.get(prompt) is not None
+    await router.semantic_cache.clear()
+    assert await router.semantic_cache.get(prompt) is None

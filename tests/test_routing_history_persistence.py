@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from router.backends.base import ModelInfo
 from router.database import get_session
@@ -54,8 +55,17 @@ class _DummyBackend:
 
 @pytest.fixture
 def test_db():
-    """Create test database."""
-    engine = create_engine("sqlite:///:memory:")
+    """Create test database using StaticPool to ensure single connection for in-memory SQLite.
+    
+    SQLite in-memory databases are isolated per connection by default. Using StaticPool
+    ensures all sessions share the same connection, allowing data to be visible across
+    different session instances.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
 
