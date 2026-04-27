@@ -205,6 +205,14 @@ DEFAULT_DIMENSION_WEIGHTS: dict[EvaluationDimension, float] = {
     EvaluationDimension.INSTRUCTION_FOLLOWING: 0.15,
 }
 
+DIMENSION_PROMPTS: dict[EvaluationDimension, str] = {
+    EvaluationDimension.ACCURACY: ACCURACY_PROMPT,
+    EvaluationDimension.HELPFULNESS: HELPFULNESS_PROMPT,
+    EvaluationDimension.CLARITY: CLARITY_PROMPT,
+    EvaluationDimension.CONCISENESS: CONCISENESS_PROMPT,
+    EvaluationDimension.INSTRUCTION_FOLLOWING: INSTRUCTION_FOLLOWING_PROMPT,
+}
+
 
 def _extract_json_from_content(content: str) -> str:
     """Extract JSON from content, handling markdown code blocks and extra text."""
